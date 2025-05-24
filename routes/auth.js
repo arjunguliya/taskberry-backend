@@ -123,4 +123,49 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+
+// @route   POST api/auth/me
+// @desc    New user signup
+// @access  Private
+router.post('/register', async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body;
+    
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+    
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Create user
+    const user = new User({
+      name,
+      email,
+      password: hashedPassword,
+      role: role || 'member'
+    });
+    
+    await user.save();
+    
+    // Generate JWT token
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET);
+    
+    res.status(201).json({
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
 module.exports = router;
