@@ -32,7 +32,7 @@ const UserSchema = new mongoose.Schema({
   managerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
-  }
+  },
   resetPasswordToken: String,
   resetPasswordExpires: Date
 }, { timestamps: true });
