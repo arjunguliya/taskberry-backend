@@ -80,4 +80,19 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
+// @route   DELETE api/reports
+// @desc    Delete a report
+// @access  Private
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const report = await Report.findByIdAndDelete(req.params.id);
+    if (!report) {
+      return res.status(404).json({ message: 'Report not found' });
+    }
+    res.json({ success: true, message: 'Report deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 module.exports = router;
