@@ -1,7 +1,8 @@
-
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs'); // ADD THIS MISSING IMPORT
+const crypto = require('crypto');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
@@ -69,11 +70,9 @@ router.get('/me', auth, async (req, res) => {
   }
 });
 
-// @route   POST api/auth/me
-// @desc    Forgot and reset password functionality
-// @access  Private
-const crypto = require('crypto');
-
+// @route   POST api/auth/forgot-password
+// @desc    Forgot password functionality
+// @access  Public
 router.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
@@ -97,6 +96,9 @@ router.post('/forgot-password', async (req, res) => {
   }
 });
 
+// @route   POST api/auth/reset-password
+// @desc    Reset password functionality
+// @access  Public
 router.post('/reset-password', async (req, res) => {
   try {
     const { token, newPassword } = req.body;
@@ -110,9 +112,8 @@ router.post('/reset-password', async (req, res) => {
       return res.status(400).json({ message: 'Invalid or expired token' });
     }
     
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    user.password = hashedPassword;
+    // Update password (let the User model handle hashing)
+    user.password = newPassword;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     await user.save();
@@ -123,10 +124,9 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-
-// @route   POST api/auth/me
+// @route   POST api/auth/register
 // @desc    New user signup
-// @access  Private
+// @access  Public
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
@@ -137,21 +137,22 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ message: 'User already exists' });
     }
     
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    // Create user
+    // Create user (let the User model handle password hashing)
     const user = new User({
       name,
       email,
-      password: hashedPassword,
+      password, // Don't hash here - User model pre-save hook will handle it
       role: role || 'member'
     });
     
     await user.save();
     
     // Generate JWT token
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET);
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
     
     res.status(201).json({
       token,
@@ -163,9 +164,9 @@ router.post('/register', async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('Registration error:', error);
     res.status(500).json({ message: error.message });
   }
 });
-
 
 module.exports = router;
