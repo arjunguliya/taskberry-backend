@@ -144,4 +144,50 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
+// Delete a user (Super Admin only)
+router.delete('/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const currentUser = req.user; // From the authentication middleware
+
+    // Check if current user is Super Admin
+    if (currentUser.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ 
+        message: 'Access denied. Only Super Admin can delete users.' 
+      });
+    }
+
+    // Prevent Super Admin from deleting themselves
+    if (currentUser.id === id) {
+      return res.status(400).json({ 
+        message: 'You cannot delete your own account.' 
+      });
+    }
+
+    // Find the user to delete
+    const userToDelete = await User.findById(id);
+    if (!userToDelete) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    // Delete all tasks assigned to this user
+    await Task.deleteMany({ assignedTo: id });
+
+    // Delete the user
+    await User.findByIdAndDelete(id);
+
+    res.json({ 
+      success: true, 
+      message: `User ${userToDelete.name} has been deleted successfully.` 
+    });
+
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ 
+      message: 'Internal server error while deleting user.' 
+    });
+  }
+});
+
+
 module.exports = router;
