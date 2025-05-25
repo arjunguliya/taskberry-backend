@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const auth = require('../middleware/auth');
+const { requireSuperAdmin, canDeleteUser } = require('../middleware/roles');
 
 // @route   GET api/users
 // @desc    Get all users
@@ -144,50 +145,142 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
-// Delete a user (Super Admin only)
-router.delete('/:id', authenticateToken, async (req, res) => {
+// @route   GET api/users
+// @desc    Get all team members
+// @access  Private (Super Admin only)
+router.get('/', auth, requireSuperAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const currentUser = req.user; // From the authentication middleware
-
-    // Check if current user is Super Admin
-    if (currentUser.role !== 'SUPER_ADMIN') {
-      return res.status(403).json({ 
-        message: 'Access denied. Only Super Admin can delete users.' 
-      });
-    }
-
-    // Prevent Super Admin from deleting themselves
-    if (currentUser.id === id) {
-      return res.status(400).json({ 
-        message: 'You cannot delete your own account.' 
-      });
-    }
-
-    // Find the user to delete
-    const userToDelete = await User.findById(id);
-    if (!userToDelete) {
-      return res.status(404).json({ message: 'User not found.' });
-    }
-
-    // Delete all tasks assigned to this user
-    await Task.deleteMany({ assignedTo: id });
-
-    // Delete the user
-    await User.findByIdAndDelete(id);
-
-    res.json({ 
-      success: true, 
-      message: `User ${userToDelete.name} has been deleted successfully.` 
-    });
-
+    const users = await User.find()
+      .select('-password -resetPasswordToken')
+      .populate('supervisorId', 'name email')
+      .populate('managerId', 'name email')
+      .sort({ createdAt: -1 });
+    
+    res.json(users);
   } catch (error) {
-    console.error('Error deleting user:', error);
-    res.status(500).json({ 
-      message: 'Internal server error while deleting user.' 
-    });
+    console.error('Error fetching users:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
+// @route   GET api/users/:userId
+// @desc    Get single user details
+// @access  Private (Super Admin only)
+router.get('/:userId', auth, requireSuperAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId)
+      .select('-password -resetPasswordToken')
+      .populate('supervisorId', 'name email role')
+      .populate('managerId', 'name email role');
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    res.json(user);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   DELETE api/users/:userId
+// @desc    Delete team member
+// @access  Private (Super Admin only, cannot delete self)
+router.delete('/:userId', 
+  auth, 
+  requireSuperAdmin, 
+  canDeleteUser, 
+  async (req, res) => {
+    try {
+      const targetUser = req.targetUser;
+      const currentUser = req.currentUser;
+      
+      // Additional security check - prevent deletion of other super admins
+      // (Optional: remove this if you want super admins to delete each other)
+      if (targetUser.role === 'super_admin') {
+        return res.status(403).json({ 
+          message: 'Cannot delete another super admin account.' 
+        });
+      }
+      
+      // Store user info for response
+      const deletedUserInfo = {
+        id: targetUser._id,
+        name: targetUser.name,
+        email: targetUser.email,
+        role: targetUser.role
+      };
+      
+      // Delete the user
+      await User.findByIdAndDelete(targetUser._id);
+      
+      // Log the deletion (for audit trail)
+      console.log(`User deleted by super admin:`, {
+        deletedUser: deletedUserInfo,
+        deletedBy: {
+          id: currentUser._id,
+          name: currentUser.name,
+          email: currentUser.email
+        },
+        timestamp: new Date().toISOString()
+      });
+      
+      res.json({ 
+        message: 'Team member deleted successfully',
+        deletedUser: deletedUserInfo
+      });
+      
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      res.status(500).json({ message: 'Server error' });
+    }
+  }
+);
+
+// @route   PUT api/users/:userId/role
+// @desc    Update user role
+// @access  Private (Super Admin only)
+router.put('/:userId/role', auth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { role } = req.body;
+    const targetUserId = req.params.userId;
+    const currentUser = req.currentUser;
+    
+    // Prevent changing own role
+    if (currentUser._id.toString() === targetUserId) {
+      return res.status(403).json({ 
+        message: 'You cannot change your own role.' 
+      });
+    }
+    
+    // Validate role
+    const validRoles = ['super_admin', 'manager', 'supervisor', 'member'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ 
+        message: 'Invalid role. Must be one of: ' + validRoles.join(', ') 
+      });
+    }
+    
+    const user = await User.findByIdAndUpdate(
+      targetUserId,
+      { role },
+      { new: true }
+    ).select('-password -resetPasswordToken');
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    res.json({ 
+      message: 'User role updated successfully',
+      user 
+    });
+    
+  } catch (error) {
+    console.error('Error updating user role:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 module.exports = router;
