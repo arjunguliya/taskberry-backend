@@ -9,10 +9,28 @@ module.exports = (req, res, next) => {
   }
 
   try {
+    // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Add user info to request
     req.user = decoded;
+    
+    console.log('Authenticated user:', {
+      userId: decoded.userId,
+      role: decoded.user?.role,
+      email: decoded.user?.email
+    });
+    
     next();
   } catch (error) {
-    res.status(401).json({ message: 'Token is not valid' });
+    console.error('Token verification error:', error.message);
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ message: 'Token has expired' });
+    } else if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ message: 'Invalid token' });
+    } else {
+      return res.status(401).json({ message: 'Token verification failed' });
+    }
   }
 };
