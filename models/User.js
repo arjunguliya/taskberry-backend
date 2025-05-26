@@ -33,9 +33,13 @@ const UserSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
-  resetPasswordToken: String,
-  resetPasswordExpires: Date
-}, { timestamps: true });
+  resetPasswordToken: {
+    type: String
+  },
+  resetPasswordExpires: {
+    type: Date
+  },
+  { timestamps: true });
 
 // Hash password before saving
 UserSchema.pre('save', async function(next) {
