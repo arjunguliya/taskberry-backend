@@ -38,8 +38,7 @@ const UserSchema = new mongoose.Schema({
   },
   resetPasswordExpires: {
     type: Date
-  },
-  { timestamps: true });
+  }, { timestamps: true });
 
 // Hash password before saving
 UserSchema.pre('save', async function(next) {
