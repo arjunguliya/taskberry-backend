@@ -4,8 +4,43 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = 'uploads/profile-pictures/';
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    // Generate unique filename
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'profile-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: function (req, file, cb) {
+    // Check if file is an image
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  }
+});
 
 // Email transporter configuration
 const createTransporter = () => {
@@ -23,11 +58,11 @@ const generatePasswordResetEmail = (resetUrl) => {
   return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <div style="background-color: #f0f0f0; padding: 20px; text-align: center;">
-        <h1 style="color: #333;">TaskBerry TaskMaster</h1>
+        <h1 style="color: #333;">Chatzy TaskMaster</h1>
       </div>
       <div style="padding: 20px; border: 1px solid #ddd; background-color: #fff;">
         <h2>Password Reset Request</h2>
-        <p>We received a request to reset your password for your TaskBerry account.</p>
+        <p>We received a request to reset your password for your Chatzy TaskMaster account.</p>
         <p>Please click the button below to reset your password. This link will expire in 1 hour.</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${resetUrl}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold;">
@@ -40,7 +75,7 @@ const generatePasswordResetEmail = (resetUrl) => {
       </div>
       <div style="padding: 20px; text-align: center; color: #666; font-size: 12px;">
         <p>This is an automated email. Please do not reply.</p>
-        <p>&copy; ${new Date().getFullYear()} TaskBerry TaskMaster. All rights reserved.</p>
+        <p>&copy; ${new Date().getFullYear()} Chatzy TaskMaster. All rights reserved.</p>
       </div>
     </div>
   `;
@@ -356,6 +391,79 @@ router.post('/change-password', auth, async (req, res) => {
       success: false,
       message: 'Server error. Please try again later.'
     });
+  }
+});
+
+// @route   POST api/auth/upload-profile-picture
+// @desc    Upload user profile picture
+// @access  Private
+router.post('/upload-profile-picture', auth, upload.single('profilePicture'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
+      });
+    }
+
+    // Get the user
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Delete old profile picture if it exists
+    if (user.avatarUrl) {
+      const oldImagePath = path.join(__dirname, '..', user.avatarUrl);
+      if (fs.existsSync(oldImagePath)) {
+        fs.unlinkSync(oldImagePath);
+      }
+    }
+
+    // Update user's avatar URL
+    const avatarUrl = `/uploads/profile-pictures/${req.file.filename}`;
+    user.avatarUrl = avatarUrl;
+    await user.save();
+
+    console.log(`Profile picture updated for user: ${user.email}`);
+    res.json({
+      success: true,
+      message: 'Profile picture updated successfully',
+      avatarUrl: avatarUrl
+    });
+
+  } catch (error) {
+    console.error('Profile picture upload error:', error);
+    
+    // Clean up uploaded file if there was an error
+    if (req.file) {
+      const filePath = req.file.path;
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Server error. Please try again later.'
+    });
+  }
+});
+
+// @route   GET /uploads/profile-pictures/:filename
+// @desc    Serve uploaded profile pictures
+// @access  Public
+router.get('/uploads/profile-pictures/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const filePath = path.join(__dirname, '..', 'uploads', 'profile-pictures', filename);
+  
+  if (fs.existsSync(filePath)) {
+    res.sendFile(path.resolve(filePath));
+  } else {
+    res.status(404).json({ message: 'Image not found' });
   }
 });
 
