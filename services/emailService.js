@@ -20,7 +20,7 @@ const generatePasswordResetEmail = (resetUrl) => {
       </div>
       <div style="padding: 20px; border: 1px solid #ddd; background-color: #fff;">
         <h2>Password Reset Request</h2>
-        <p>We received a request to reset your password for your TaskBerry account.</p>
+        <p>We received a request to reset your password for your Chatzy TaskMaster account.</p>
         <p>Please click the button below to reset your password. This link will expire in 1 hour.</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${resetUrl}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold;">
@@ -33,7 +33,7 @@ const generatePasswordResetEmail = (resetUrl) => {
       </div>
       <div style="padding: 20px; text-align: center; color: #666; font-size: 12px;">
         <p>This is an automated email. Please do not reply.</p>
-        <p>&copy; ${new Date().getFullYear()} TaskBerry TaskMaster. All rights reserved.</p>
+        <p>&copy; ${new Date().getFullYear()} Chatzy TaskMaster. All rights reserved.</p>
       </div>
     </div>
   `;
