@@ -22,6 +22,26 @@ router.get('/', auth, requireSuperAdmin, async (req, res) => {
   }
 });
 
+// @route   GET api/users/pending
+// @desc    Get all pending users awaiting approval
+// @access  Private (Super Admin only)
+router.get('/pending', auth, requireSuperAdmin, async (req, res) => {
+  try {
+    const pendingUsers = await User.find({ 
+      status: 'pending_approval',
+      role: 'pending'
+    })
+      .select('-password -resetPasswordToken')
+      .sort({ createdAt: -1 });
+    
+    console.log('Found pending users:', pendingUsers.length);
+    res.json(pendingUsers);
+  } catch (error) {
+    console.error('Error fetching pending users:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // @route   GET api/users/:id
 // @desc    Get user by ID
 // @access  Private
@@ -146,6 +166,98 @@ router.put('/:id', auth, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// @route   PUT api/users/:userId/approve
+// @desc    Approve a pending user
+// @access  Private (Super Admin only)
+router.put('/:userId/approve', auth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { role, supervisorId, managerId } = req.body;
+    const targetUserId = req.params.userId;
+    
+    // Validate role
+    const validRoles = ['super_admin', 'manager', 'supervisor', 'member'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ 
+        message: 'Invalid role. Must be one of: ' + validRoles.join(', ') 
+      });
+    }
+    
+    // Update user status and role
+    const updateFields = {
+      status: 'active',
+      role: role
+    };
+    
+    // Add supervisor/manager if provided
+    if (supervisorId) updateFields.supervisorId = supervisorId;
+    if (managerId) updateFields.managerId = managerId;
+    
+    const user = await User.findByIdAndUpdate(
+      targetUserId,
+      updateFields,
+      { new: true }
+    ).select('-password -resetPasswordToken');
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    console.log(`User approved: ${user.email} with role: ${role}`);
+    
+    res.json({ 
+      message: 'User approved successfully',
+      user 
+    });
+    
+  } catch (error) {
+    console.error('Error approving user:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   DELETE api/users/:userId/reject
+// @desc    Reject and remove a pending user
+// @access  Private (Super Admin only)
+router.delete('/:userId/reject', auth, requireSuperAdmin, async (req, res) => {
+  try {
+    const targetUserId = req.params.userId;
+    
+    // Find the user first
+    const user = await User.findById(targetUserId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Only allow rejection of pending users
+    if (user.status !== 'pending_approval' || user.role !== 'pending') {
+      return res.status(400).json({ 
+        message: 'Can only reject pending users' 
+      });
+    }
+    
+    // Store user info for response
+    const rejectedUserInfo = {
+      id: user._id,
+      name: user.name,
+      email: user.email
+    };
+    
+    // Delete the user
+    await User.findByIdAndDelete(targetUserId);
+    
+    console.log(`User rejected and removed: ${rejectedUserInfo.email}`);
+    
+    res.json({ 
+      message: 'User rejected and removed successfully',
+      rejectedUser: rejectedUserInfo
+    });
+    
+  } catch (error) {
+    console.error('Error rejecting user:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
