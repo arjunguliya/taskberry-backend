@@ -58,11 +58,11 @@ const generatePasswordResetEmail = (resetUrl) => {
   return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <div style="background-color: #f0f0f0; padding: 20px; text-align: center;">
-        <h1 style="color: #333;">Chatzy TaskMaster</h1>
+        <h1 style="color: #333;">TaskBerry TaskMaster</h1>
       </div>
       <div style="padding: 20px; border: 1px solid #ddd; background-color: #fff;">
         <h2>Password Reset Request</h2>
-        <p>We received a request to reset your password for your Chatzy TaskMaster account.</p>
+        <p>We received a request to reset your password for your TaskBerry account.</p>
         <p>Please click the button below to reset your password. This link will expire in 1 hour.</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${resetUrl}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold;">
@@ -75,7 +75,7 @@ const generatePasswordResetEmail = (resetUrl) => {
       </div>
       <div style="padding: 20px; text-align: center; color: #666; font-size: 12px;">
         <p>This is an automated email. Please do not reply.</p>
-        <p>&copy; ${new Date().getFullYear()} Chatzy TaskMaster. All rights reserved.</p>
+        <p>&copy; ${new Date().getFullYear()} TaskBerry TaskMaster. All rights reserved.</p>
       </div>
     </div>
   `;
@@ -92,7 +92,7 @@ const sendPasswordResetEmail = async (email, resetToken) => {
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: email,
-      subject: 'Reset Your Chatzy TaskMaster Password',
+      subject: 'Reset Your TaskBerry Password',
       html: generatePasswordResetEmail(resetUrl),
       text: `Reset your password by visiting: ${resetUrl}`
     };
@@ -112,17 +112,42 @@ const sendPasswordResetEmail = async (email, resetToken) => {
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   
+  console.log('=== LOGIN ATTEMPT ===');
+  console.log('Email:', email);
+  console.log('Password provided:', !!password);
+  
   try {
     // Check if user exists
     const user = await User.findOne({ email });
+    console.log('User found:', !!user);
+    
     if (!user) {
-      return res.status(400).json({ message: 'Invalid credentials' });
+      console.log('No user found with email:', email);
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid credentials' 
+      });
     }
     
+    console.log('User details:', {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      status: user.status
+    });
+    
     // Validate password
+    console.log('Comparing passwords...');
     const isMatch = await user.comparePassword(password);
+    console.log('Password match:', isMatch);
+    
     if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid credentials' });
+      console.log('Password does not match');
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid credentials' 
+      });
     }
     
     // Create JWT payload
@@ -143,7 +168,12 @@ router.post('/login', async (req, res) => {
       { expiresIn: '24h' }
     );
     
+    console.log('Login successful for:', user.email);
+    console.log('=== LOGIN SUCCESS ===');
+    
+    // Updated response format to match frontend expectations
     res.json({ 
+      success: true,  // Added this field
       token,
       user: {
         id: user._id,
@@ -152,13 +182,18 @@ router.post('/login', async (req, res) => {
         role: user.role,
         avatarUrl: user.avatarUrl,
         supervisorId: user.supervisorId,
-        managerId: user.managerId
+        managerId: user.managerId,
+        status: user.status
       }
     });
     
   } catch (error) {
+    console.error('=== LOGIN ERROR ===');
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Server Error' });
+    res.status(500).json({ 
+      success: false,
+      message: 'Server Error' 
+    });
   }
 });
 
