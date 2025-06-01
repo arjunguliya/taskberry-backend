@@ -15,6 +15,7 @@ router.get('/', auth, requireSuperAdmin, async (req, res) => {
       .select('-password -resetPasswordToken')
       .populate('supervisorId', 'name email')
       .populate('managerId', 'name email')
+      .populate('approvedBy', 'name email')
       .sort({ createdAt: -1 });
     
     res.json(users);
@@ -34,6 +35,7 @@ router.get('/pending', auth, requireSuperAdmin, async (req, res) => {
       role: 'pending'
     })
       .select('-password -resetPasswordToken')
+      .populate('approvedBy', 'name email')
       .sort({ createdAt: -1 });
     
     console.log('Found pending users:', pendingUsers.length);
