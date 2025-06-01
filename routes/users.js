@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 const { requireSuperAdmin, canDeleteUser } = require('../middleware/roles');
+const mongoose = require('mongoose');
 
 // @route   GET api/users
 // @desc    Get all team members
@@ -174,47 +175,140 @@ router.put('/:id', auth, async (req, res) => {
 // @access  Private (Super Admin only)
 router.put('/:userId/approve', auth, requireSuperAdmin, async (req, res) => {
   try {
+    console.log('=== APPROVE USER REQUEST ===');
+    console.log('Request params:', req.params);
+    console.log('Request body:', req.body);
+    console.log('Current user:', req.currentUser?.email);
+    
     const { role, supervisorId, managerId } = req.body;
     const targetUserId = req.params.userId;
+    
+    // Validate MongoDB ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+      console.log('Invalid user ID format:', targetUserId);
+      return res.status(400).json({ message: 'Invalid user ID format' });
+    }
+    
+    // Check if user exists and is pending
+    const existingUser = await User.findById(targetUserId);
+    console.log('Found user:', existingUser ? {
+      id: existingUser._id,
+      email: existingUser.email,
+      status: existingUser.status,
+      role: existingUser.role
+    } : 'Not found');
+    
+    if (!existingUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Check if user is actually pending
+    if (existingUser.status !== 'pending_approval' || existingUser.role !== 'pending') {
+      console.log('User is not pending approval:', {
+        status: existingUser.status,
+        role: existingUser.role
+      });
+      return res.status(400).json({ 
+        message: 'User is not pending approval',
+        currentStatus: existingUser.status,
+        currentRole: existingUser.role
+      });
+    }
     
     // Validate role
     const validRoles = ['super_admin', 'manager', 'supervisor', 'member'];
     if (!validRoles.includes(role)) {
+      console.log('Invalid role provided:', role);
       return res.status(400).json({ 
         message: 'Invalid role. Must be one of: ' + validRoles.join(', ') 
       });
     }
     
-    // Update user status and role
+    // Build update object
     const updateFields = {
       status: 'active',
-      role: role
+      role: role,
+      approvedBy: req.currentUser._id,
+      approvedAt: new Date()
     };
     
-    // Add supervisor/manager if provided
-    if (supervisorId) updateFields.supervisorId = supervisorId;
-    if (managerId) updateFields.managerId = managerId;
-    
-    const user = await User.findByIdAndUpdate(
-      targetUserId,
-      updateFields,
-      { new: true }
-    ).select('-password -resetPasswordToken');
-    
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    // Validate and add supervisor/manager if provided
+    if (supervisorId) {
+      if (!mongoose.Types.ObjectId.isValid(supervisorId)) {
+        return res.status(400).json({ message: 'Invalid supervisor ID format' });
+      }
+      updateFields.supervisorId = supervisorId;
     }
     
-    console.log(`User approved: ${user.email} with role: ${role}`);
+    if (managerId) {
+      if (!mongoose.Types.ObjectId.isValid(managerId)) {
+        return res.status(400).json({ message: 'Invalid manager ID format' });
+      }
+      updateFields.managerId = managerId;
+    }
+    
+    console.log('Update fields to apply:', updateFields);
+    
+    // Update user with validation
+    const updatedUser = await User.findByIdAndUpdate(
+      targetUserId,
+      { $set: updateFields },
+      { 
+        new: true, 
+        runValidators: true 
+      }
+    ).select('-password -resetPasswordToken');
+    
+    if (!updatedUser) {
+      console.log('Failed to update user - user not found after update');
+      return res.status(404).json({ message: 'Failed to update user' });
+    }
+    
+    console.log('User successfully approved:', {
+      id: updatedUser._id,
+      email: updatedUser.email,
+      newStatus: updatedUser.status,
+      newRole: updatedUser.role,
+      approvedBy: updatedUser.approvedBy,
+      approvedAt: updatedUser.approvedAt
+    });
     
     res.json({ 
       message: 'User approved successfully',
-      user 
+      user: updatedUser
     });
     
   } catch (error) {
-    console.error('Error approving user:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('=== APPROVE USER ERROR ===');
+    console.error('Error type:', error.constructor.name);
+    console.error('Error message:', error.message);
+    
+    // Handle specific MongoDB errors
+    if (error.name === 'ValidationError') {
+      console.error('Validation errors:', error.errors);
+      return res.status(400).json({ 
+        message: 'Validation error',
+        details: Object.keys(error.errors).map(key => ({
+          field: key,
+          message: error.errors[key].message
+        }))
+      });
+    }
+    
+    if (error.name === 'CastError') {
+      console.error('Cast error:', error);
+      return res.status(400).json({ 
+        message: 'Invalid data format',
+        field: error.path,
+        value: error.value
+      });
+    }
+    
+    console.error('Full error:', error);
+    res.status(500).json({ 
+      message: 'Server error during user approval',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
   }
 });
 
