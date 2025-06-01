@@ -32,11 +32,13 @@ const UserSchema = new mongoose.Schema(
     },
     supervisorId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: 'User',
+      default: null
     },
     managerId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: 'User',
+      default: null
     },
     resetPasswordToken: {
       type: String
