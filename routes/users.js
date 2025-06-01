@@ -25,6 +25,52 @@ router.get('/', auth, requireSuperAdmin, async (req, res) => {
   }
 });
 
+// @route   GET api/users/active
+// @desc    Get only active users (for frontend filtering)
+// @access  Private
+router.get('/active', auth, async (req, res) => {
+  try {
+    const activeUsers = await User.find({ status: 'active' })
+      .select('-password -resetPasswordToken')
+      .populate('supervisorId', 'name email')
+      .populate('managerId', 'name email')
+      .sort({ createdAt: -1 });
+    
+    console.log('Active users fetched:', activeUsers.length);
+    res.json(activeUsers);
+  } catch (error) {
+    console.error('Error fetching active users:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET api/users/by-role/:role
+// @desc    Get users by specific role (for dropdowns)
+// @access  Private
+router.get('/by-role/:role', auth, async (req, res) => {
+  try {
+    const { role } = req.params;
+    const validRoles = ['super_admin', 'manager', 'supervisor', 'member'];
+    
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ message: 'Invalid role specified' });
+    }
+    
+    const users = await User.find({ 
+      role: role,
+      status: 'active'
+    })
+      .select('name email role')
+      .sort({ name: 1 });
+    
+    console.log(`Users with role ${role}:`, users.length);
+    res.json(users);
+  } catch (error) {
+    console.error(`Error fetching users with role ${req.params.role}:`, error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // @route   GET api/users/pending
 // @desc    Get all pending users awaiting approval
 // @access  Private (Super Admin only)
@@ -51,7 +97,11 @@ router.get('/pending', auth, requireSuperAdmin, async (req, res) => {
 // @access  Private
 router.get('/:id', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('-password');
+    const user = await User.findById(req.params.id)
+      .select('-password')
+      .populate('supervisorId', 'name email')
+      .populate('managerId', 'name email');
+    
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -149,8 +199,8 @@ router.put('/:id', auth, async (req, res) => {
   if (name) userFields.name = name;
   if (email) userFields.email = email;
   if (role) userFields.role = role;
-  if (supervisorId) userFields.supervisorId = supervisorId;
-  if (managerId) userFields.managerId = managerId;
+  if (supervisorId !== undefined) userFields.supervisorId = supervisorId || null;
+  if (managerId !== undefined) userFields.managerId = managerId || null;
   if (avatarUrl) userFields.avatarUrl = avatarUrl;
   
   try {
@@ -174,7 +224,7 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // @route   PUT api/users/:userId/approve
-// @desc    Approve a pending user
+// @desc    Approve a pending user with hierarchical assignments
 // @access  Private (Super Admin only)
 router.put('/:userId/approve', auth, requireSuperAdmin, async (req, res) => {
   try {
@@ -228,6 +278,25 @@ router.put('/:userId/approve', auth, requireSuperAdmin, async (req, res) => {
       });
     }
     
+    // ENHANCED: Validate hierarchical requirements
+    if (role === 'member') {
+      if (!supervisorId || !managerId) {
+        console.log('Member role requires both supervisor and manager');
+        return res.status(400).json({ 
+          message: 'Members must have both a supervisor and manager assigned',
+          required: ['supervisorId', 'managerId']
+        });
+      }
+    } else if (role === 'supervisor') {
+      if (!managerId) {
+        console.log('Supervisor role requires manager');
+        return res.status(400).json({ 
+          message: 'Supervisors must have a manager assigned',
+          required: ['managerId']
+        });
+      }
+    }
+    
     // Build update object
     const updateFields = {
       status: 'active',
@@ -241,14 +310,40 @@ router.put('/:userId/approve', auth, requireSuperAdmin, async (req, res) => {
       if (!mongoose.Types.ObjectId.isValid(supervisorId)) {
         return res.status(400).json({ message: 'Invalid supervisor ID format' });
       }
+      
+      // Verify supervisor exists and has correct role
+      const supervisor = await User.findById(supervisorId);
+      if (!supervisor || supervisor.role !== 'supervisor') {
+        return res.status(400).json({ 
+          message: 'Invalid supervisor - user must have supervisor role' 
+        });
+      }
+      
       updateFields.supervisorId = supervisorId;
+      console.log('Assigned supervisor:', supervisor.name, supervisor.email);
+    } else {
+      // Explicitly set to null if not provided
+      updateFields.supervisorId = null;
     }
     
     if (managerId) {
       if (!mongoose.Types.ObjectId.isValid(managerId)) {
         return res.status(400).json({ message: 'Invalid manager ID format' });
       }
+      
+      // Verify manager exists and has correct role
+      const manager = await User.findById(managerId);
+      if (!manager || manager.role !== 'manager') {
+        return res.status(400).json({ 
+          message: 'Invalid manager - user must have manager role' 
+        });
+      }
+      
       updateFields.managerId = managerId;
+      console.log('Assigned manager:', manager.name, manager.email);
+    } else {
+      // Explicitly set to null if not provided
+      updateFields.managerId = null;
     }
     
     console.log('Update fields to apply:', updateFields);
@@ -261,19 +356,31 @@ router.put('/:userId/approve', auth, requireSuperAdmin, async (req, res) => {
         new: true, 
         runValidators: true 
       }
-    ).select('-password -resetPasswordToken');
+    )
+      .select('-password -resetPasswordToken')
+      .populate('supervisorId', 'name email')
+      .populate('managerId', 'name email')
+      .populate('approvedBy', 'name email');
     
     if (!updatedUser) {
       console.log('Failed to update user - user not found after update');
       return res.status(404).json({ message: 'Failed to update user' });
     }
     
-    console.log('User successfully approved:', {
+    console.log('User successfully approved with hierarchy:', {
       id: updatedUser._id,
       email: updatedUser.email,
       name: updatedUser.name,
       newStatus: updatedUser.status,
       newRole: updatedUser.role,
+      supervisor: updatedUser.supervisorId ? {
+        id: updatedUser.supervisorId._id,
+        name: updatedUser.supervisorId.name
+      } : null,
+      manager: updatedUser.managerId ? {
+        id: updatedUser.managerId._id,
+        name: updatedUser.managerId.name
+      } : null,
       approvedBy: updatedUser.approvedBy,
       approvedAt: updatedUser.approvedAt
     });
@@ -288,6 +395,8 @@ router.put('/:userId/approve', auth, requireSuperAdmin, async (req, res) => {
         name: updatedUser.name,
         role: role,
         approvedBy: req.currentUser.name,
+        supervisor: updatedUser.supervisorId?.name,
+        manager: updatedUser.managerId?.name,
         loginUrl: process.env.FRONTEND_URL || 'https://taskberry-frontend.vercel.app'
       });
       
@@ -297,13 +406,25 @@ router.put('/:userId/approve', auth, requireSuperAdmin, async (req, res) => {
     } catch (emailError) {
       console.error('Failed to send approval email:', emailError);
       // Don't fail the approval if email fails, just log the error
-      // You might want to implement a retry mechanism or queue here
     }
     
     res.json({ 
-      message: 'User approved successfully',
+      message: 'User approved successfully with hierarchical assignment',
       user: updatedUser,
-      emailSent: emailSent
+      emailSent: emailSent,
+      hierarchy: {
+        role: updatedUser.role,
+        supervisor: updatedUser.supervisorId ? {
+          id: updatedUser.supervisorId._id,
+          name: updatedUser.supervisorId.name,
+          email: updatedUser.supervisorId.email
+        } : null,
+        manager: updatedUser.managerId ? {
+          id: updatedUser.managerId._id,
+          name: updatedUser.managerId.name,
+          email: updatedUser.managerId.email
+        } : null
+      }
     });
     
   } catch (error) {
