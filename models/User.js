@@ -58,6 +58,16 @@ const UserSchema = new mongoose.Schema(
   }
 );
 
+// Transform _id to id when converting to JSON
+UserSchema.set('toJSON', {
+  transform: function(doc, ret) {
+    ret.id = ret._id;
+    delete ret._id;
+    delete ret.__v;
+    return ret;
+  }
+});
+
 // Hash password before saving
 UserSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
