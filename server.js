@@ -3,7 +3,9 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const userRoutes = require('./routes/users');
-const User = require('./models/User'); // Add this import
+const taskRoutes = require('./routes/tasks');
+const reportRoutes = require('./routes/reports');
+const User = require('./models/User');
 
 dotenv.config();
 
@@ -23,6 +25,8 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/tasks', taskRoutes);
+app.use('/api/reports', reportRoutes);
 app.use('/uploads', express.static('uploads')); // Serve static files from uploads directory
 
 // Health check endpoint
