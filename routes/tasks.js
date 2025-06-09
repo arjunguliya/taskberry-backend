@@ -3,6 +3,7 @@ const router = express.Router();
 const Task = require('../models/Task');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
+const mongoose = require('mongoose');
 
 // Helper function to check if user is in manager's team
 const isUserInManagerTeam = async (userId, managerId) => {
@@ -215,6 +216,11 @@ router.get('/', auth, async (req, res) => {
 // @access  Private
 router.get('/:id', auth, async (req, res) => {
   try {
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid task ID format' });
+    }
+
     const task = await Task.findById(req.params.id)
       .populate('assigneeId', 'name email')
       .populate('createdBy', 'name email');
@@ -273,6 +279,8 @@ router.post('/', auth, async (req, res) => {
   const { title, description, assigneeId, targetDate, status, priority, tags } = req.body;
   
   try {
+    console.log('Creating task with data:', req.body);
+
     const currentUser = await User.findById(req.user.userId);
     if (!currentUser) {
       return res.status(404).json({ message: 'User not found' });
@@ -283,6 +291,11 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ message: 'Title, assignee, and target date are required' });
     }
     
+    // Validate ObjectId format for assigneeId
+    if (!mongoose.Types.ObjectId.isValid(assigneeId)) {
+      return res.status(400).json({ message: 'Invalid assignee ID format' });
+    }
+
     // Validate assignee
     const assignee = await User.findById(assigneeId);
     if (!assignee) {
@@ -297,11 +310,17 @@ router.post('/', auth, async (req, res) => {
       return res.status(403).json({ message: 'You cannot assign tasks to this user' });
     }
     
+    // Validate date format
+    const targetDateObj = new Date(targetDate);
+    if (isNaN(targetDateObj.getTime())) {
+      return res.status(400).json({ message: 'Invalid target date format' });
+    }
+
     const newTask = new Task({
-      title,
-      description,
-      assigneeId,
-      targetDate,
+      title: title.trim(),
+      description: description ? description.trim() : '',
+      assigneeId: assigneeId,
+      targetDate: targetDateObj,
       status: status || 'not-started',
       priority: priority || 'medium',
       tags: tags || [],
@@ -310,14 +329,26 @@ router.post('/', auth, async (req, res) => {
       createdBy: currentUser._id
     });
     
+    console.log('Saving new task:', newTask);
     const task = await newTask.save();
+    console.log('Task saved successfully:', task._id);
+    
     const populatedTask = await Task.findById(task._id)
       .populate('assigneeId', 'name email')
       .populate('createdBy', 'name email');
     
-    res.json(populatedTask);
+    res.status(201).json(populatedTask);
   } catch (error) {
-    console.error(error);
+    console.error('Task creation error:', error);
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({ 
+        message: 'Validation error', 
+        errors: errors
+      });
+    }
+    
     res.status(500).json({ message: 'Server Error' });
   }
 });
@@ -329,6 +360,15 @@ router.put('/:id', auth, async (req, res) => {
   const { title, description, assigneeId, targetDate, status, priority, tags } = req.body;
   
   try {
+    console.log('=== TASK UPDATE REQUEST ===');
+    console.log('Task ID:', req.params.id);
+    console.log('Request body:', req.body);
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid task ID format' });
+    }
+
     const currentUser = await User.findById(req.user.userId);
     if (!currentUser) {
       return res.status(404).json({ message: 'User not found' });
@@ -339,55 +379,63 @@ router.put('/:id', auth, async (req, res) => {
       return res.status(404).json({ message: 'Task not found' });
     }
     
-    console.log('Task update attempt:', {
+    console.log('Current task data:', {
       taskId: task._id,
-      currentUserId: currentUser._id,
-      currentUserRole: currentUser.role,
-      taskCreatedBy: task.createdBy,
-      taskAssigneeId: task.assigneeId,
-      newAssigneeId: assigneeId
+      title: task.title,
+      status: task.status,
+      assigneeId: task.assigneeId,
+      createdBy: task.createdBy
+    });
+
+    console.log('Current user data:', {
+      userId: currentUser._id,
+      role: currentUser.role,
+      name: currentUser.name
     });
     
-    // FIXED: Enhanced edit permissions to include supervisors
+    // ENHANCED: More comprehensive edit permissions
     let canEdit = false;
+    let editReason = '';
     
     // Rule 1: Creator can edit
     if (task.createdBy && task.createdBy.toString() === currentUser._id.toString()) {
       canEdit = true;
-      console.log('Edit allowed: User is task creator');
+      editReason = 'User is task creator';
     }
     
     // Rule 2: Current assignee can edit (if they're supervisor or higher)
-    if (task.assigneeId.toString() === currentUser._id.toString() && 
+    else if (task.assigneeId.toString() === currentUser._id.toString() && 
         ['supervisor', 'manager', 'super_admin'].includes(currentUser.role)) {
       canEdit = true;
-      console.log('Edit allowed: User is task assignee with appropriate role');
+      editReason = 'User is task assignee with appropriate role';
     }
     
     // Rule 3: Manager can edit tasks of their team
-    if (currentUser.role === 'manager') {
+    else if (currentUser.role === 'manager') {
       const isTeamTask = await isUserInManagerTeam(task.assigneeId.toString(), currentUser._id.toString());
       if (isTeamTask) {
         canEdit = true;
-        console.log('Edit allowed: Manager editing team task');
+        editReason = 'Manager editing team task';
       }
     }
     
     // Rule 4: Supervisor can edit tasks assigned to their team members
-    if (currentUser.role === 'supervisor') {
+    else if (currentUser.role === 'supervisor') {
       const taskAssignee = await User.findById(task.assigneeId);
       if (taskAssignee && taskAssignee.supervisorId && 
           taskAssignee.supervisorId.toString() === currentUser._id.toString()) {
         canEdit = true;
-        console.log('Edit allowed: Supervisor editing team member task');
+        editReason = 'Supervisor editing team member task';
       }
     }
     
     // Rule 5: Super admin can edit any task
-    if (currentUser.role === 'super_admin') {
+    else if (currentUser.role === 'super_admin') {
       canEdit = true;
-      console.log('Edit allowed: Super admin');
+      editReason = 'Super admin';
     }
+    
+    console.log('Edit permission check:', { canEdit, editReason });
     
     if (!canEdit) {
       console.log('Edit denied: No applicable permission rule matched');
@@ -404,6 +452,13 @@ router.put('/:id', auth, async (req, res) => {
     
     // If assignee is being changed, check reassignment permissions
     if (assigneeId && assigneeId !== task.assigneeId.toString()) {
+      console.log('Checking reassignment permissions...');
+      
+      // Validate new assignee ObjectId format
+      if (!mongoose.Types.ObjectId.isValid(assigneeId)) {
+        return res.status(400).json({ message: 'Invalid new assignee ID format' });
+      }
+
       let canReassign = false;
       
       // Rule 1: Creator can reassign
@@ -431,7 +486,7 @@ router.put('/:id', auth, async (req, res) => {
         return res.status(403).json({ message: 'You cannot reassign this task' });
       }
       
-      // Validate new assignee
+      // Validate new assignee exists
       const newAssignee = await User.findById(assigneeId);
       if (!newAssignee) {
         return res.status(400).json({ message: 'New assignee not found' });
@@ -446,36 +501,104 @@ router.put('/:id', auth, async (req, res) => {
       }
     }
     
-    // Update task
+    // Build update object with validation
     const updateFields = {};
-    if (title) updateFields.title = title;
-    if (description !== undefined) updateFields.description = description;
-    if (assigneeId) updateFields.assigneeId = assigneeId;
-    if (targetDate) updateFields.targetDate = targetDate;
-    if (status) updateFields.status = status;
-    if (priority) updateFields.priority = priority;
-    if (tags) updateFields.tags = tags;
-    updateFields.lastUpdated = new Date();
     
-    // If status is being changed to completed, set completedDate
-    if (status === 'completed' && task.status !== 'completed') {
-      updateFields.completedDate = new Date();
-    } else if (status && status !== 'completed') {
-      updateFields.completedDate = undefined;
+    if (title !== undefined) {
+      if (title.trim().length === 0) {
+        return res.status(400).json({ message: 'Title cannot be empty' });
+      }
+      updateFields.title = title.trim();
     }
     
+    if (description !== undefined) {
+      updateFields.description = description ? description.trim() : '';
+    }
+    
+    if (assigneeId) {
+      updateFields.assigneeId = assigneeId;
+    }
+    
+    if (targetDate) {
+      const targetDateObj = new Date(targetDate);
+      if (isNaN(targetDateObj.getTime())) {
+        return res.status(400).json({ message: 'Invalid target date format' });
+      }
+      updateFields.targetDate = targetDateObj;
+    }
+    
+    if (status) {
+      const validStatuses = ['not-started', 'in-progress', 'completed'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ message: 'Invalid status value' });
+      }
+      updateFields.status = status;
+    }
+    
+    if (priority) {
+      const validPriorities = ['low', 'medium', 'high', 'urgent'];
+      if (!validPriorities.includes(priority)) {
+        return res.status(400).json({ message: 'Invalid priority value' });
+      }
+      updateFields.priority = priority;
+    }
+    
+    if (tags) {
+      updateFields.tags = Array.isArray(tags) ? tags : [];
+    }
+    
+    updateFields.lastUpdated = new Date();
+    
+    // Handle completion logic
+    if (status === 'completed' && task.status !== 'completed') {
+      updateFields.completedDate = new Date();
+      console.log('Setting completion date');
+    } else if (status && status !== 'completed' && task.status === 'completed') {
+      updateFields.completedDate = undefined;
+      console.log('Removing completion date');
+    }
+    
+    console.log('Update fields:', updateFields);
+    
+    // Perform the update
     const updatedTask = await Task.findByIdAndUpdate(
       req.params.id,
-      { $set: updateFields },
-      { new: true }
+      { $set: updateFields, $unset: updateFields.completedDate === undefined ? { completedDate: 1 } : {} },
+      { 
+        new: true,
+        runValidators: true
+      }
     )
       .populate('assigneeId', 'name email')
       .populate('createdBy', 'name email');
     
+    if (!updatedTask) {
+      return res.status(404).json({ message: 'Task not found after update' });
+    }
+    
     console.log('Task updated successfully:', updatedTask._id);
+    console.log('=== TASK UPDATE SUCCESS ===');
+    
     res.json(updatedTask);
   } catch (error) {
-    console.error('Task update error:', error);
+    console.error('=== TASK UPDATE ERROR ===');
+    console.error('Error details:', error);
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({ 
+        message: 'Validation error', 
+        errors: errors
+      });
+    }
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({ 
+        message: 'Invalid data format',
+        field: error.path
+      });
+    }
+    
     res.status(500).json({ message: 'Server Error' });
   }
 });
@@ -485,68 +608,118 @@ router.put('/:id', auth, async (req, res) => {
 // @access  Private
 router.put('/:id/status', auth, async (req, res) => {
   try {
+    console.log('=== STATUS UPDATE REQUEST ===');
+    console.log('Task ID:', req.params.id);
+    console.log('New status:', req.body.status);
+
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid task ID format' });
+    }
+
     const { status } = req.body;
     const currentUser = await User.findById(req.user.userId);
+    
+    if (!currentUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
     
     const task = await Task.findById(req.params.id);
     if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
     
+    // Validate status
+    const validStatuses = ['not-started', 'in-progress', 'completed'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ message: 'Invalid status value' });
+    }
+    
     // Check if user can update this task's status
     let canUpdate = false;
+    let updateReason = '';
     
     // Task assignee can update status
     if (task.assigneeId.toString() === currentUser._id.toString()) {
       canUpdate = true;
+      updateReason = 'User is task assignee';
     }
     
     // Task creator can update status
-    if (task.createdBy && task.createdBy.toString() === currentUser._id.toString()) {
+    else if (task.createdBy && task.createdBy.toString() === currentUser._id.toString()) {
       canUpdate = true;
+      updateReason = 'User is task creator';
     }
     
     // Manager can update status of team tasks
-    if (currentUser.role === 'manager') {
+    else if (currentUser.role === 'manager') {
       const isTeamTask = await isUserInManagerTeam(task.assigneeId.toString(), currentUser._id.toString());
       if (isTeamTask) {
         canUpdate = true;
+        updateReason = 'Manager updating team task status';
       }
     }
     
     // Supervisor can update status of their team's tasks
-    if (currentUser.role === 'supervisor') {
+    else if (currentUser.role === 'supervisor') {
       const taskAssignee = await User.findById(task.assigneeId);
       if (taskAssignee && taskAssignee.supervisorId && 
           taskAssignee.supervisorId.toString() === currentUser._id.toString()) {
         canUpdate = true;
+        updateReason = 'Supervisor updating team task status';
       }
     }
     
     // Super admin can update any task
-    if (currentUser.role === 'super_admin') {
+    else if (currentUser.role === 'super_admin') {
       canUpdate = true;
+      updateReason = 'Super admin';
     }
+    
+    console.log('Status update permission check:', { canUpdate, updateReason });
     
     if (!canUpdate) {
       return res.status(403).json({ message: 'You cannot update this task status' });
     }
     
+    // Build update object
+    const updateFields = {
+      status,
+      lastUpdated: new Date()
+    };
+    
+    // Handle completion date
+    if (status === 'completed' && task.status !== 'completed') {
+      updateFields.completedDate = new Date();
+    } else if (status !== 'completed' && task.status === 'completed') {
+      // Remove completion date when moving away from completed
+      updateFields.$unset = { completedDate: 1 };
+    }
+    
     const updatedTask = await Task.findByIdAndUpdate(
       req.params.id,
-      { 
-        status,
-        lastUpdated: new Date(),
-        ...(status === 'completed' ? { completedDate: new Date() } : {})
-      },
-      { new: true }
+      updateFields,
+      { new: true, runValidators: true }
     )
       .populate('assigneeId', 'name email')
       .populate('createdBy', 'name email');
     
+    console.log('Status updated successfully:', updatedTask._id, 'to', status);
+    console.log('=== STATUS UPDATE SUCCESS ===');
+    
     res.json(updatedTask);
   } catch (error) {
-    console.error(error);
+    console.error('=== STATUS UPDATE ERROR ===');
+    console.error('Error details:', error);
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({ 
+        message: 'Validation error', 
+        errors: errors
+      });
+    }
+    
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -556,6 +729,11 @@ router.put('/:id/status', auth, async (req, res) => {
 // @access  Private
 router.delete('/:id', auth, async (req, res) => {
   try {
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid task ID format' });
+    }
+
     const currentUser = await User.findById(req.user.userId);
     if (!currentUser) {
       return res.status(404).json({ message: 'User not found' });
@@ -604,6 +782,11 @@ router.delete('/:id', auth, async (req, res) => {
 // @access  Private
 router.get('/user/:userId', auth, async (req, res) => {
   try {
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(req.params.userId)) {
+      return res.status(400).json({ message: 'Invalid user ID format' });
+    }
+
     const currentUser = await User.findById(req.user.userId);
     const targetUserId = req.params.userId;
     
